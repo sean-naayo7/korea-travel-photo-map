@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ko"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f7f7f4"><title>나의 국내여행 지도</title>
+<style>
+:root{--ink:#24342e;--muted:#89918d;--line:#dfe3df;--bg:#f7f7f4;--green:#547c68}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif}
+main{max-width:760px;margin:auto;padding:24px 18px 48px}h1{font-size:28px;margin:12px 0 8px}.sub,.hint{color:var(--muted);line-height:1.6}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:22px 0}.stat,.panel{background:#fff;border:1px solid var(--line);border-radius:22px;padding:17px}.stat b{display:block;font-size:26px}.stat span{color:var(--muted);font-size:13px}
+.panel{margin:14px 0;padding:18px}.head{display:flex;justify-content:space-between;gap:8px;font-weight:750;margin-bottom:12px}
+#map{width:100%;height:auto;display:block;overflow:visible;touch-action:pan-y}svg .region{fill:#fff;stroke:#c9d0cb;stroke-width:.55;vector-effect:non-scaling-stroke;cursor:pointer}svg .region:active{opacity:.8}svg text{font-size:1.7px;fill:#52615a;pointer-events:none;text-anchor:middle;dominant-baseline:middle;font-weight:600}
+.btn{border:1px solid var(--line);background:#fff;border-radius:14px;padding:12px 15px;font-weight:700;color:var(--ink)}.primary{background:var(--green);color:white}.row{display:flex;gap:8px;flex-wrap:wrap}
+.records{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.record{border:1px solid var(--line);border-radius:15px;overflow:hidden;background:white}.record img{width:100%;height:130px;object-fit:cover}.record div{padding:10px;font-size:13px}
+.modal{position:fixed;inset:0;background:#0007;display:none;align-items:flex-end;justify-content:center;z-index:5}.modal.show{display:flex}.sheet{background:#fff;border-radius:24px 24px 0 0;width:min(100%,600px);max-height:92vh;overflow:auto;padding:22px 18px 32px}
+label{display:block;font-size:13px;font-weight:700;margin:14px 0 6px}input,textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px;font:inherit}textarea{min-height:78px}.preview{display:flex;gap:8px;overflow:auto;margin-top:10px}.photo{position:relative;flex:0 0 82px}.preview img{width:82px;height:82px;object-fit:cover;border-radius:10px}.photo button{position:absolute;right:2px;top:2px;border:0;border-radius:50%;background:#fff;padding:3px 7px}
+.close{float:right;border:0;border-radius:50%;padding:8px}.notice{font-size:12px;color:#65716a;line-height:1.6;background:#f4f6f3;padding:12px;border-radius:12px;margin-top:14px}
+</style></head><body><main>
+<h1>나의 국내여행 지도</h1><p class="sub">다녀온 시·군을 눌러 나만의 여행 사진으로 채워보세요.</p>
+<div class="stats"><div class="stat"><b id="visitedN">0</b><span>방문 지역</span></div><div class="stat"><b id="photoN">0</b><span>모은 사진</span></div><div class="stat"><b id="tripN">0</b><span>여행 기록</span></div></div>
+<section class="panel"><div class="head"><span>대한민국 시·군 지도</span><span class="hint" id="status">지도 불러오는 중</span></div><svg id="map" viewBox="0 0 100 120" role="img" aria-label="대한민국 시군 지도"></svg><p class="hint">서울·광역시는 하나의 지역으로, 도 지역은 시·군 단위로 표시합니다. 방문한 지역만 사진으로 채워집니다.</p></section>
+<section class="panel"><div class="head"><span>내 여행 사진</span><span class="hint" id="count">0개 지역</span></div><div id="records" class="records">아직 등록한 기록이 없어요.</div>
+<div class="row" style="margin-top:16px"><button class="btn" id="backup">백업 저장</button><button class="btn" id="restoreBtn">백업 불러오기</button><input id="restoreFile" type="file" accept="application/json" hidden></div>
+<div class="notice">사진과 기록은 이 브라우저에 저장됩니다. 기기 변경이나 브라우저 데이터 삭제 전에 백업해 주세요.</div></section></main>
+<div class="modal" id="modal"><div class="sheet"><button class="close" id="close">닫기</button><h2 id="placeTitle">지역 기록</h2>
+<label>여행 날짜</label><input type="date" id="date"><label>사진 추가 (여러 장 가능)</label><input type="file" id="photos" accept="image/*" multiple><div class="preview" id="preview"></div>
+<label>메모</label><textarea id="memo" placeholder="기억하고 싶은 내용을 적어보세요."></textarea>
+<div class="row" style="margin-top:18px"><button class="btn primary" id="save">저장하기</button><button class="btn" id="del">기록 삭제</button></div></div></div>
+<script>
+const GEOJSON_URL="https://raw.githubusercontent.com/KnellBalm/kr-admin-geojson/main/sig.geojson";
+const DB_NAME="korea-travel-photo-map-v1";let db,regions=[],records={},selected=null,staged=[];
+const $=id=>document.getElementById(id);
+function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME,1);req.onupgradeneeded=()=>req.result.createObjectStore("data");req.onsuccess=()=>{db=req.result;resolve()};req.onerror=()=>reject(req.error)})}
+function readRecords(){return new Promise(resolve=>{const req=db.transaction("data").objectStore("data").get("records");req.onsuccess=()=>resolve(req.result||{});req.onerror=()=>resolve({})})}
+function persist(){return new Promise((resolve,reject)=>{const tx=db.transaction("data","readwrite");tx.objectStore("data").put(records,"records");tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}
+function geomPolys(g){if(g.type==="Polygon")return [g.coordinates];if(g.type==="MultiPolygon")return g.coordinates;return []}
+function allCoords(g){return geomPolys(g).flat(2)}
+function makeRegions(features){
+ const metroCodes=new Set(["11","26","27","28","29","30","31","36","50"]); // Seoul, Busan, Daegu, Incheon, Gwangju, Daejeon, Ulsan, Sejong, Gyeonggi? Jeju
+ const metroNames=new Map([["11","서울특별시"],["26","부산광역시"],["27","대구광역시"],["28","인천광역시"],["29","광주광역시"],["30","대전광역시"],["31","울산광역시"],["36","세종특별자치시"],["50","제주특별자치도"]]);
+ const out=new Map(), cityGu=new Map();
+ for(const f of features){const p=f.properties||{},code=String(p.CTPRVN_CD||"");
+   if(metroCodes.has(code)){const name=metroNames.get(code)||p.SIDO_NM||p.FULL_NM?.split(" ")[0]||p.SIG_KOR_NM;const key="metro-"+code;if(!out.has(key))out.set(key,{key,name,polys:[]});out.get(key).polys.push(...geomPolys(f.geometry));continue}
+   const nm=p.SIG_KOR_NM||"",full=p.FULL_NM||nm;
+   if(nm.endsWith("구")){
+     const parts=full.split(" ");const parent=parts.length>=3?parts.slice(0,-1).join(" "):full;
+     const key="city-"+parent;if(!cityGu.has(key))cityGu.set(key,{key,name:parent,polys:[]});cityGu.get(key).polys.push(...geomPolys(f.geometry));
+   }else{
+     const key="sig-"+(p.SIG_CD||full);if(!out.has(key))out.set(key,{key,name:full,polys:[]});out.get(key).polys.push(...geomPolys(f.geometry));
+   }
+ }
+ for(const [k,v] of cityGu)out.set(k,v);
+ return [...out.values()];
+}
+function renderMap(){
+ const svg=$("map"),all=regions.flatMap(r=>r.polys.flat(2)),lons=all.map(p=>p[0]),lats=all.map(p=>p[1]);
+ const minX=Math.min(...lons),maxX=Math.max(...lons),minY=Math.min(...lats),maxY=Math.max(...lats),cos=Math.cos(36.5*Math.PI/180);
+ const project=p=>[(p[0]-minX)*cos,maxY-p[1]],projected=all.map(project),w=Math.max(...projected.map(p=>p[0])),h=Math.max(...projected.map(p=>p[1]));
+ const scale=Math.min(92/w,112/h),ox=(100-w*scale)/2,oy=4,pt=p=>[ox+project(p)[0]*scale,oy+project(p)[1]*scale];
+ svg.innerHTML="";svg.setAttribute("viewBox",`0 0 100 ${Math.max(120,oy+h*scale+4)}`);
+ regions.forEach((r,index)=>{
+  const clipId="clip-"+index,defs=svg.querySelector("defs")||document.createElementNS("http://www.w3.org/2000/svg","defs");if(!defs.parentNode)svg.appendChild(defs);
+  const cp=document.createElementNS("http://www.w3.org/2000/svg","clipPath");cp.setAttribute("id",clipId);
+  let pathD="";
+  r.polys.forEach(poly=>poly.forEach(ring=>{ring.forEach((p,i)=>{const q=pt(p);pathD+=(i?"L":"M")+q[0].toFixed(3)+","+q[1].toFixed(3)});pathD+="Z"}));
+  const shape=document.createElementNS("http://www.w3.org/2000/svg","path");shape.setAttribute("d",pathD);cp.appendChild(shape);defs.appendChild(cp);
+  const rec=records[r.key];
+  if(rec?.photos?.length){const img=document.createElementNS("http://www.w3.org/2000/svg","image");img.setAttribute("href",rec.photos[0]);img.setAttribute("x","0");img.setAttribute("y","0");img.setAttribute("width","100");img.setAttribute("height",String(Math.max(120,oy+h*scale+4)));img.setAttribute("preserveAspectRatio","xMidYMid slice");img.setAttribute("clip-path",`url(#${clipId})`);svg.appendChild(img)}
+  const path=document.createElementNS("http://www.w3.org/2000/svg","path");path.setAttribute("d",pathD);path.setAttribute("class","region");path.onclick=()=>edit(r.key,r.name);svg.appendChild(path);
+  const center=r.polys.flat(2).reduce((a,p)=>[a[0]+p[0],a[1]+p[1]],[0,0]).map(v=>v/r.polys.flat(2).length);const c=pt(center);
+  const text=document.createElementNS("http://www.w3.org/2000/svg","text");text.setAttribute("x",c[0]);text.setAttribute("y",c[1]);text.textContent=r.name.split(" ").slice(-1)[0];svg.appendChild(text);
+ });
+ $("status").textContent=regions.length+"개 지역";
+}
+function edit(key,name){selected={key,name};const rec=records[key]||{};$("placeTitle").textContent=name;$("date").value=rec.date||new Date().toISOString().slice(0,10);$("memo").value=rec.memo||"";$("photos").value="";staged=[];drawPreview(rec.photos||[]);$("modal").classList.add("show")}
+function drawPreview(photos){$("preview").innerHTML="";photos.forEach((src,i)=>{const wrap=document.createElement("div");wrap.className="photo";const img=document.createElement("img");img.src=src;const del=document.createElement("button");del.type="button";del.textContent="×";del.onclick=()=>{if(i<(records[selected.key]?.photos||[]).length){records[selected.key].photos.splice(i,1);drawPreview(records[selected.key].photos.concat(staged))}else{staged.splice(i-(records[selected.key]?.photos||[]).length,1);drawPreview((records[selected.key]?.photos||[]).concat(staged))}};wrap.append(img,del);$("preview").append(wrap)})}
+$("photos").onchange=e=>{[...e.target.files].forEach(file=>{const reader=new FileReader();reader.onload=()=>{staged.push(reader.result);drawPreview([...(records[selected.key]?.photos||[]),...staged])};reader.readAsDataURL(file)})};
+$("close").onclick=()=>$("modal").classList.remove("show");
+$("save").onclick=async()=>{const old=records[selected.key]||{};records[selected.key]={name:selected.name,date:$("date").value,memo:$("memo").value,photos:[...(old.photos||[]),...staged]};await persist();$("modal").classList.remove("show");refresh()};
+$("del").onclick=async()=>{if(confirm("이 지역 기록을 삭제할까요?")){delete records[selected.key];await persist();$("modal").classList.remove("show");refresh()}};
+function refresh(){const entries=Object.entries(records).filter(([k,r])=>(r.photos||[]).length||r.memo),photoCount=entries.reduce((s,[k,r])=>s+(r.photos||[]).length,0);$("visitedN").textContent=entries.length;$("photoN").textContent=photoCount;$("tripN").textContent=entries.length;$("count").textContent=entries.length+"개 지역";$("records").innerHTML="";if(!entries.length)$("records").textContent="아직 등록한 기록이 없어요.";entries.forEach(([k,r])=>{const card=document.createElement("div");card.className="record";if(r.photos?.length){const img=document.createElement("img");img.src=r.photos[0];card.append(img)}const body=document.createElement("div"),b=document.createElement("b"),s=document.createElement("div");b.textContent=r.name;s.textContent=(r.date||"날짜 미입력")+" · 사진 "+(r.photos?.length||0)+"장";body.append(b,s);card.append(body);card.onclick=()=>edit(k,r.name);$("records").append(card)});renderMap()}
+$("backup").onclick=()=>{const blob=new Blob([JSON.stringify({version:1,records})],{type:"application/json"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="국내여행지도_백업.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+$("restoreBtn").onclick=()=>$("restoreFile").click();$("restoreFile").onchange=e=>{const f=e.target.files[0];if(!f)return;const reader=new FileReader();reader.onload=async()=>{try{const data=JSON.parse(reader.result);records={...records,...data.records};await persist();refresh();alert("백업을 불러왔어요.")}catch{alert("백업 파일을 확인해 주세요.")}};reader.readAsText(f)};
+(async()=>{try{await openDB();records=await readRecords();$("status").textContent="지도 데이터 연결 중";const response=await fetch(GEOJSON_URL);if(!response.ok)throw Error("지도 데이터 응답 오류");const geo=await response.json();regions=makeRegions(geo.features||[]);if(!regions.length)throw Error("행정구역 정보가 없습니다");renderMap();refresh()}catch(err){$("status").textContent="지도 연결 실패";$("map").innerHTML='<text x="50" y="60">지도를 불러오지 못했어요.</text>';console.error(err)}})();
+</script></body></html>
